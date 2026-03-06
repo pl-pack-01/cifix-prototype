@@ -65,7 +65,7 @@ Runs `ruff format` and `ruff check --fix` on a local repository, displays unifie
 cifix diagnose <run_id> --repo <owner/repo>
 ```
 
-Chains the full pipeline: fetches logs → classifies errors → identifies ruff-fixable issues → applies fixes locally → verifies results.
+Chains the full pipeline: fetches logs → classifies errors → identifies ruff-fixable issues → applies fixes locally → verifies results. Also detects `ModuleNotFoundError` / `ImportError` and adds missing packages to `requirements.txt` and/or `pyproject.toml`.
 
 ### Examples
 
@@ -156,6 +156,18 @@ cifix diagnose --help     Show diagnose options
 | `--json-output` | Output everything as JSON |
 | `--no-cache` | Bypass the local log cache |
 
+## Dependency Fixes
+
+When `cifix diagnose` encounters `ModuleNotFoundError` or `ImportError` in CI logs, it automatically:
+
+1. Extracts the missing module name (e.g. `yaml` from `No module named 'yaml'`)
+2. Maps it to the correct PyPI package (e.g. `yaml` → `PyYAML`, `cv2` → `opencv-python`)
+3. Adds the package to `requirements.txt` and/or `pyproject.toml` if present
+
+Common import-to-PyPI mappings are built in (PIL → Pillow, sklearn → scikit-learn, bs4 → beautifulsoup4, etc.). Unknown modules fall back to using the module name as the package name.
+
+Use `--dry-run` to preview what would be added without modifying files.
+
 ## Caching
 
 Cifix caches downloaded workflow logs locally so repeated runs against the same run ID are near-instant. GitHub Actions logs are immutable once a run completes, so cached data stays valid.
@@ -186,7 +198,8 @@ cifix/
         │   ├── fix_cmd.py      # cifix fix command
         │   └── diagnose_cmd.py # cifix diagnose command
         └── fixer/
-            └── ruff_fixer.py   # Ruff auto-fix engine
+            ├── ruff_fixer.py   # Ruff auto-fix engine
+            └── dep_fixer.py    # Dependency auto-fix engine
 ```
 
 ## License

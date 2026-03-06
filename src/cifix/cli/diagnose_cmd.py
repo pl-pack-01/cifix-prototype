@@ -11,6 +11,7 @@ from cifix.classifier import classify
 from cifix.formatter import format_analysis
 from cifix.github import fetch_run_logs
 from cifix.fixer.ruff_fixer import RuffFixer, format_fix_results
+from cifix.fixer.dep_fixer import DepFixer, format_dep_results
 
 
 @click.command("diagnose")
@@ -80,6 +81,8 @@ def diagnose_cmd(
             }, indent=2))
         else:
             click.echo("\nNo ruff-fixable errors detected.")
+        # Still check for dependency fixes even without ruff errors
+        _run_dep_fix(result, repo_path, dry_run, as_json)
         return
 
     if not as_json:
@@ -147,9 +150,32 @@ def diagnose_cmd(
             dry_run=dry_run,
         ))
 
+    # ── Phase 4: Dependency fixes ──────────────────────────────────────
+    _run_dep_fix(result, repo_path, dry_run, as_json)
+
     # Exit 1 if issues remain after fix
     if verify and not verify.all_clean:
         sys.exit(1)
+
+
+def _run_dep_fix(result, repo_path: str, dry_run: bool, as_json: bool) -> None:
+    """Run dependency fixer on classified import errors."""
+    try:
+        fixer = DepFixer(repo_path, dry_run=dry_run)
+    except FileNotFoundError as exc:
+        if not as_json:
+            click.secho(f"Dep fix skipped: {exc}", fg="yellow", err=True)
+        return
+
+    dep_result = fixer.fix(result.errors)
+
+    if not dep_result.missing_modules:
+        return
+
+    if as_json:
+        click.echo(json.dumps({"dep_fix": dep_result.to_dict()}, indent=2))
+    else:
+        click.echo(format_dep_results(dep_result, dry_run=dry_run))
 
 
 def _extract_ruff_targets(result) -> list[str]:

@@ -81,6 +81,7 @@ def mock_classify_result():
         file_path="src/app.py",
         line="src/app.py:1:1: E501",
         matched_text="src/app.py:1:1: E501",
+        error_type="lint_violation",
         category=SimpleNamespace(value="code"),
         severity=SimpleNamespace(value="error"),
     )
@@ -99,6 +100,7 @@ def mock_classify_no_ruff():
         file_path="tests/test_foo.py",
         line="",
         matched_text="",
+        error_type="test_failure",
         category=SimpleNamespace(value="code"),
         severity=SimpleNamespace(value="error"),
     )
