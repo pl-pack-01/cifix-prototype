@@ -26,6 +26,13 @@ from cifix.fixer.dep_fixer import DepFixer, format_dep_results
 @click.option("--repo-path", default=".", type=click.Path(exists=True), help="Local repo path (default: cwd).")
 @click.option("--json-output", "as_json", is_flag=True, help="Output everything as JSON.")
 @click.option("--no-cache", is_flag=True, help="Bypass the local log cache.")
+@click.option(
+    "--llm", "llm_provider", default=None,
+    type=click.Choice(["anthropic", "openai", "gemini"], case_sensitive=False),
+    help="Enable LLM-assisted classification (anthropic, openai, gemini).",
+)
+@click.option("--explain", is_flag=True, help="Generate AI explanations for errors (requires --llm).")
+@click.option("--api-key", default=None, help="API key for the LLM provider.")
 def diagnose_cmd(
     run_id: str,
     repo: str,
@@ -38,6 +45,9 @@ def diagnose_cmd(
     repo_path: str,
     as_json: bool,
     no_cache: bool,
+    llm_provider: str | None,
+    explain: bool,
+    api_key: str | None,
 ) -> None:
     """Fetch CI logs, classify errors, and auto-fix what's possible.
 
@@ -64,6 +74,10 @@ def diagnose_cmd(
     if not as_json:
         click.echo("Classifying errors...")
     result = classify(raw_log, provider=provider)
+
+    # ── Phase 2.5: LLM Review (optional) ────────────────────────────────
+    if llm_provider:
+        _run_llm_review(result, llm_provider, api_key, explain, as_json)
 
     if not as_json:
         click.echo(format_analysis(result))
@@ -156,6 +170,46 @@ def diagnose_cmd(
     # Exit 1 if issues remain after fix
     if verify and not verify.all_clean:
         sys.exit(1)
+
+
+def _run_llm_review(
+    result, llm_name: str, api_key: str | None, explain: bool, as_json: bool,
+) -> None:
+    """Run LLM-assisted review and optional explanation generation."""
+    try:
+        from cifix.llm_provider import get_provider
+        from cifix.llm_advisor import LLMAdvisor, recompute_verdict
+    except ImportError as exc:
+        click.secho(f"LLM support unavailable: {exc}", fg="red", err=True)
+        return
+
+    try:
+        provider = get_provider(llm_name, api_key=api_key)
+    except (ImportError, ValueError) as exc:
+        click.secho(f"LLM error: {exc}", fg="red", err=True)
+        return
+
+    advisor = LLMAdvisor(provider)
+
+    # Review low-confidence errors
+    review_candidates = sum(1 for e in result.errors if e.needs_llm_review)
+    if review_candidates:
+        if not as_json:
+            click.echo(
+                f"\nSending {review_candidates} ambiguous error(s) to {provider.name}..."
+            )
+        review_result = advisor.review_errors(result.errors)
+        recompute_verdict(result)
+        if not as_json and review_result.reviewed_count:
+            click.echo(f"  Reclassified {review_result.reviewed_count} error(s).")
+
+    # Explain errors
+    if explain:
+        if not as_json:
+            click.echo(f"Generating explanations via {provider.name}...")
+        explain_result = advisor.explain_errors(result.errors)
+        if not as_json and explain_result.explained_count:
+            click.echo(f"  Added {explain_result.explained_count} explanation(s).")
 
 
 def _run_dep_fix(result, repo_path: str, dry_run: bool, as_json: bool) -> None:

@@ -29,10 +29,17 @@ def format_analysis(result: AnalysisResult) -> str:
     lines.append("=" * 60)
     lines.append(_VERDICT_MSG.get(result.verdict, ""))
     lines.append(f"  Found {result.infra_count} infra + {result.code_count} code issue(s)")
+
+    if result.low_confidence_count:
+        lines.append(
+            f"  ({result.low_confidence_count} low-confidence — "
+            f"use --llm for AI-assisted review)"
+        )
     lines.append("")
 
     infra = [e for e in result.errors if e.category == ErrorCategory.INFRASTRUCTURE]
     code = [e for e in result.errors if e.category == ErrorCategory.CODE]
+    unknown = [e for e in result.errors if e.category == ErrorCategory.UNKNOWN]
 
     def _section(title: str, errors):
         if not errors:
@@ -40,10 +47,14 @@ def format_analysis(result: AnalysisResult) -> str:
         lines.append(f"── {title} ({len(errors)}) {'─' * (40 - len(title))}")
         for i, e in enumerate(errors, 1):
             icon = _SEV_ICON.get(e.severity.value, "⚪")
-            lines.append(f"  {i}. {icon} [{e.error_type}] {e.summary}")
+            conf_pct = int(e.confidence * 100)
+            ai_tag = " [AI]" if e.explanation else ""
+            lines.append(f"  {i}. {icon} [{e.error_type}] {e.summary} [{conf_pct}%]{ai_tag}")
             if e.step_name:
                 lines.append(f"     Step: {e.step_name}")
             lines.append(f"     Suggestion: {e.suggestion}")
+            if e.explanation:
+                lines.append(f"     Explanation: {e.explanation}")
             if e.source_lines:
                 lines.append("     Context:")
                 for sl in e.source_lines:
@@ -52,6 +63,7 @@ def format_analysis(result: AnalysisResult) -> str:
 
     _section("INFRASTRUCTURE", infra)
     _section("CODE", code)
+    _section("UNKNOWN", unknown)
 
     lines.append("=" * 60)
     return "\n".join(lines)

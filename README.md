@@ -103,6 +103,10 @@ cifix diagnose 12345678 --repo octocat/hello-world --no-fix
 # Diagnose with JSON output
 cifix diagnose 12345678 --repo octocat/hello-world --json-output
 
+# Diagnose with LLM-assisted classification (Anthropic, OpenAI, or Gemini)
+cifix diagnose 12345678 --repo octocat/hello-world --llm anthropic
+cifix diagnose 12345678 --repo octocat/hello-world --llm openai --explain
+
 # Pass token directly
 cifix logs 12345678 --repo myorg/myrepo --token ghp_xxx
 ```
@@ -155,6 +159,33 @@ cifix diagnose --help     Show diagnose options
 | `--repo-path` | Local repo path (default: current directory) |
 | `--json-output` | Output everything as JSON |
 | `--no-cache` | Bypass the local log cache |
+| `--llm` | LLM provider for AI-assisted classification: anthropic, openai, gemini |
+| `--explain` | Generate AI explanations for errors (requires --llm) |
+| `--api-key` | API key for the LLM provider (or set env var) |
+
+## LLM Integration
+
+Each classified error carries a confidence score (0-100%). Errors below 70% confidence are flagged for LLM review. Unmatched suspicious lines are detected as "unknown" with low confidence.
+
+Pass `--llm` to send ambiguous errors to an AI for reclassification and better suggestions:
+
+```bash
+cifix diagnose 12345678 --repo owner/repo --llm anthropic
+cifix diagnose 12345678 --repo owner/repo --llm openai --explain
+cifix diagnose 12345678 --repo owner/repo --llm gemini --api-key YOUR_KEY
+```
+
+Supported providers:
+
+| Provider | Install | Env var |
+|----------|---------|---------|
+| Anthropic (Claude) | `pip install cifix[anthropic]` | `ANTHROPIC_API_KEY` |
+| OpenAI (ChatGPT) | `pip install cifix[openai]` | `OPENAI_API_KEY` |
+| Google Gemini | `pip install cifix[gemini]` | `GEMINI_API_KEY` |
+
+Or install all providers at once: `pip install cifix[llm]`
+
+Add `--explain` to generate plain-English explanations for every error. The LLM features are fully optional — cifix works offline with regex-only classification by default.
 
 ## Dependency Fixes
 
@@ -194,6 +225,8 @@ cifix/
         ├── patterns.py         # Regex pattern registry
         ├── preprocessor.py     # Log cleaning and step splitting
         ├── formatter.py        # Human-readable output formatting
+        ├── llm_provider.py     # LLM provider abstraction (Anthropic/OpenAI/Gemini)
+        ├── llm_advisor.py      # LLM-assisted error review and explanations
         ├── cli/
         │   ├── fix_cmd.py      # cifix fix command
         │   └── diagnose_cmd.py # cifix diagnose command
