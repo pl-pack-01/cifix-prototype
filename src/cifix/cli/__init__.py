@@ -4,6 +4,10 @@ import json
 import os
 import click
 
+from rich.console import Console
+
+console = Console()
+
 
 def get_token(token):
     """Resolve GitHub token from option or environment."""
@@ -16,6 +20,7 @@ def get_token(token):
 
 
 @click.group()
+@click.version_option(package_name="cifix")
 def cli():
     """cifix - CI failure analyzer."""
     pass
@@ -28,17 +33,16 @@ def cli():
 @click.option("--no-cache", is_flag=True, help="Bypass the local log cache.")
 def logs(run_id, repo, token, no_cache):
     """Fetch and display logs for a CI run."""
+    from rich.panel import Panel
     from cifix.github import fetch_run_logs
 
     token = get_token(token)
-    click.echo(f"Fetching logs for run {run_id} in {repo}...")
-    log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
+
+    with console.status(f"[bold blue]Fetching logs for run {run_id}...[/bold blue]"):
+        log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
 
     for filename, content in log_files:
-        click.echo(f"\n{'=' * 60}")
-        click.echo(f"  {filename}")
-        click.echo(f"{'=' * 60}")
-        click.echo(content)
+        console.print(Panel(content, title=f"[bold]{filename}[/bold]", border_style="blue"))
 
 
 @cli.command("classify")
@@ -77,14 +81,14 @@ def classify_cmd(run_id, repo, token, provider, output, category, severity, no_c
     from cifix.patterns import ErrorCategory, ErrorSeverity
 
     token = get_token(token)
-    click.echo(f"Fetching logs for run {run_id} in {repo}...")
-    log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
 
-    # Combine all log file contents into one string for classification
+    with console.status("[bold blue]Fetching logs...[/bold blue]"):
+        log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
+
     raw_log = "\n".join(content for _, content in log_files)
 
-    click.echo("Classifying errors...")
-    result = classify(raw_log, provider=provider)
+    with console.status("[bold blue]Classifying errors...[/bold blue]"):
+        result = classify(raw_log, provider=provider)
 
     # Apply filters
     if category != "all":
@@ -99,9 +103,9 @@ def classify_cmd(run_id, repo, token, provider, output, category, severity, no_c
 
     # Output
     if output == "json":
-        click.echo(json.dumps(result.to_dict(), indent=2))
+        console.print_json(json.dumps(result.to_dict(), indent=2))
     else:
-        click.echo(format_analysis(result))
+        console.print(format_analysis(result))
 
 from cifix.cli.fix_cmd import fix_cmd
 from cifix.cli.diagnose_cmd import diagnose_cmd

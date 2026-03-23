@@ -8,7 +8,8 @@ from pathlib import Path
 
 import click
 
-from cifix.fixer.ruff_fixer import RuffFixer, format_fix_results
+from cifix.fixer.ruff_fixer import RuffFixer
+from cifix.formatter import format_fix_results
 
 
 @click.command("fix")

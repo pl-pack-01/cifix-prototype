@@ -65,7 +65,17 @@ Runs `ruff format` and `ruff check --fix` on a local repository, displays unifie
 cifix diagnose <run_id> --repo <owner/repo>
 ```
 
-Chains the full pipeline: fetches logs → classifies errors → identifies ruff-fixable issues → applies fixes locally → verifies results. Also detects `ModuleNotFoundError` / `ImportError` and adds missing packages to `requirements.txt` and/or `pyproject.toml`.
+Chains the full pipeline: fetches logs, classifies errors, identifies ruff-fixable issues, applies fixes locally, and verifies results. Also detects `ModuleNotFoundError` / `ImportError` and adds missing packages to your dependency files.
+
+By default, `diagnose` prompts for confirmation before applying fixes. Use `--apply` to skip the prompt, or `--dry-run` to preview without modifying files.
+
+```bash
+# Auto-apply without confirmation
+cifix diagnose 12345678 --repo owner/repo --apply
+
+# Preview only
+cifix diagnose 12345678 --repo owner/repo --dry-run
+```
 
 ### Examples
 
@@ -94,8 +104,8 @@ cifix fix -t src/ -t tests/
 # Full diagnose pipeline
 cifix diagnose 12345678 --repo octocat/hello-world
 
-# Diagnose with dry run (preview fixes)
-cifix diagnose 12345678 --repo octocat/hello-world --dry-run
+# Diagnose with auto-apply (skip confirmation)
+cifix diagnose 12345678 --repo octocat/hello-world --apply
 
 # Diagnose but only classify, skip fixing
 cifix diagnose 12345678 --repo octocat/hello-world --no-fix
@@ -115,6 +125,7 @@ cifix logs 12345678 --repo myorg/myrepo --token ghp_xxx
 
 ```
 cifix --help              Show all commands
+cifix --version           Show version
 cifix logs --help         Show logs options
 cifix classify --help     Show classify options
 cifix fix --help          Show fix options
@@ -153,6 +164,7 @@ cifix diagnose --help     Show diagnose options
 | `--token`, `-t` | GitHub token (or set GITHUB_TOKEN env var) |
 | `--provider`, `-p` | CI provider (default: github) |
 | `--dry-run` | Preview fixes without modifying files |
+| `--apply` | Apply fixes without confirmation prompt |
 | `--no-fix` | Classify only, skip auto-fix |
 | `--no-verify` | Skip post-fix verification step |
 | `--no-diff` | Suppress unified diff output |
@@ -192,10 +204,14 @@ Add `--explain` to generate plain-English explanations for every error. The LLM 
 When `cifix diagnose` encounters `ModuleNotFoundError` or `ImportError` in CI logs, it automatically:
 
 1. Extracts the missing module name (e.g. `yaml` from `No module named 'yaml'`)
-2. Maps it to the correct PyPI package (e.g. `yaml` → `PyYAML`, `cv2` → `opencv-python`)
-3. Adds the package to `requirements.txt` and/or `pyproject.toml` if present
+2. Filters out standard library modules (e.g. `os`, `json`, `pathlib`)
+3. Maps it to the correct PyPI package (e.g. `yaml` -> `PyYAML`, `cv2` -> `opencv-python`)
+4. Adds the package to whichever dependency files exist in your project:
+   - `requirements.txt`
+   - `pyproject.toml` with `[project.dependencies]` (PEP 621)
+   - `pyproject.toml` with `[tool.poetry.dependencies]` (Poetry)
 
-Common import-to-PyPI mappings are built in (PIL → Pillow, sklearn → scikit-learn, bs4 → beautifulsoup4, etc.). Unknown modules fall back to using the module name as the package name.
+Common import-to-PyPI mappings are built in (PIL -> Pillow, sklearn -> scikit-learn, bs4 -> beautifulsoup4, etc.). Unknown modules fall back to using the module name as the package name.
 
 Use `--dry-run` to preview what would be added without modifying files.
 
@@ -218,16 +234,16 @@ cifix/
 └── src/
     └── cifix/
         ├── __init__.py
-        ├── cli.py              # Click CLI entry point
         ├── cache.py            # Local disk cache for log downloads
         ├── github.py           # GitHub API client
         ├── classifier.py       # Error classification engine
         ├── patterns.py         # Regex pattern registry
         ├── preprocessor.py     # Log cleaning and step splitting
-        ├── formatter.py        # Human-readable output formatting
+        ├── formatter.py        # Rich terminal output formatting
         ├── llm_provider.py     # LLM provider abstraction (Anthropic/OpenAI/Gemini)
         ├── llm_advisor.py      # LLM-assisted error review and explanations
         ├── cli/
+        │   ├── __init__.py     # Click CLI entry point
         │   ├── fix_cmd.py      # cifix fix command
         │   └── diagnose_cmd.py # cifix diagnose command
         └── fixer/

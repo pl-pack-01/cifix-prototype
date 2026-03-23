@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,26 +52,77 @@ _MODULE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Standard library modules — skip these from dependency fixing.
+# Built from sys.stdlib_module_names (3.10+) with fallback for older Pythons.
+if sys.version_info >= (3, 10):
+    _STDLIB_MODULES: frozenset[str] = sys.stdlib_module_names
+else:
+    # Manually maintained subset for 3.9
+    _STDLIB_MODULES = frozenset({
+        "abc", "aifc", "argparse", "ast", "asynchat", "asyncio", "asyncore",
+        "atexit", "base64", "bdb", "binascii", "binhex", "bisect", "builtins",
+        "bz2", "calendar", "cgi", "cgitb", "chunk", "cmath", "cmd", "code",
+        "codecs", "codeop", "collections", "colorsys", "compileall", "concurrent",
+        "configparser", "contextlib", "contextvars", "copy", "copyreg", "cProfile",
+        "crypt", "csv", "ctypes", "curses", "dataclasses", "datetime", "dbm",
+        "decimal", "difflib", "dis", "distutils", "doctest", "email",
+        "encodings", "enum", "errno", "faulthandler", "fcntl", "filecmp",
+        "fileinput", "fnmatch", "fractions", "ftplib", "functools", "gc",
+        "getopt", "getpass", "gettext", "glob", "graphlib", "grp", "gzip",
+        "hashlib", "heapq", "hmac", "html", "http", "idlelib", "imaplib",
+        "imghdr", "imp", "importlib", "inspect", "io", "ipaddress",
+        "itertools", "json", "keyword", "lib2to3", "linecache", "locale",
+        "logging", "lzma", "mailbox", "mailcap", "marshal", "math",
+        "mimetypes", "mmap", "modulefinder", "multiprocessing", "netrc",
+        "nis", "nntplib", "numbers", "operator", "optparse", "os",
+        "ossaudiodev", "pathlib", "pdb", "pickle", "pickletools", "pipes",
+        "pkgutil", "platform", "plistlib", "poplib", "posix", "posixpath",
+        "pprint", "profile", "pstats", "pty", "pwd", "py_compile",
+        "pyclbr", "pydoc", "queue", "quopri", "random", "re", "readline",
+        "reprlib", "resource", "rlcompleter", "runpy", "sched", "secrets",
+        "select", "selectors", "shelve", "shlex", "shutil", "signal",
+        "site", "smtpd", "smtplib", "sndhdr", "socket", "socketserver",
+        "spwd", "sqlite3", "ssl", "stat", "statistics", "string",
+        "stringprep", "struct", "subprocess", "sunau", "symtable", "sys",
+        "sysconfig", "syslog", "tabnanny", "tarfile", "telnetlib", "tempfile",
+        "termios", "test", "textwrap", "threading", "time", "timeit",
+        "tkinter", "token", "tokenize", "trace", "traceback", "tracemalloc",
+        "tty", "turtle", "turtledemo", "types", "typing", "unicodedata",
+        "unittest", "urllib", "uu", "uuid", "venv", "warnings", "wave",
+        "weakref", "webbrowser", "winreg", "winsound", "wsgiref",
+        "xdrlib", "xml", "xmlrpc", "zipapp", "zipfile", "zipimport", "zlib",
+        "_thread",
+    })
+
+
+def is_stdlib(module_name: str) -> bool:
+    """Return True if the module is part of the Python standard library."""
+    return module_name in _STDLIB_MODULES
+
 
 @dataclass
 class DepFixResult:
     """Outcome of a dependency fix attempt."""
     missing_modules: list[str] = field(default_factory=list)
+    skipped_stdlib: list[str] = field(default_factory=list)
     mapped_packages: dict[str, str] = field(default_factory=dict)  # module -> pypi
     added_to_requirements: list[str] = field(default_factory=list)
     added_to_pyproject: list[str] = field(default_factory=list)
+    added_to_poetry: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     @property
     def has_fixes(self) -> bool:
-        return bool(self.added_to_requirements or self.added_to_pyproject)
+        return bool(self.added_to_requirements or self.added_to_pyproject or self.added_to_poetry)
 
     def to_dict(self) -> dict:
         return {
             "missing_modules": self.missing_modules,
+            "skipped_stdlib": self.skipped_stdlib,
             "mapped_packages": self.mapped_packages,
             "added_to_requirements": self.added_to_requirements,
             "added_to_pyproject": self.added_to_pyproject,
+            "added_to_poetry": self.added_to_poetry,
             "errors": self.errors,
         }
 
@@ -152,7 +204,7 @@ def add_to_requirements_txt(
 def add_to_pyproject_toml(
     repo_path: Path, packages: list[str], dry_run: bool = False
 ) -> list[str]:
-    """Add missing packages to pyproject.toml [project.dependencies]. Returns list added."""
+    """Add missing packages to pyproject.toml [project.dependencies] (PEP 621). Returns list added."""
     toml_path = repo_path / "pyproject.toml"
     if not toml_path.exists():
         return []
@@ -185,6 +237,58 @@ def add_to_pyproject_toml(
     return to_add
 
 
+def add_to_poetry_pyproject(
+    repo_path: Path, packages: list[str], dry_run: bool = False
+) -> list[str]:
+    """Add missing packages to pyproject.toml [tool.poetry.dependencies] (Poetry). Returns list added."""
+    toml_path = repo_path / "pyproject.toml"
+    if not toml_path.exists():
+        return []
+
+    content = toml_path.read_text(encoding="utf-8")
+
+    # Check if this is a Poetry project
+    if "[tool.poetry.dependencies]" not in content:
+        return []
+
+    # Find the [tool.poetry.dependencies] section
+    section_match = re.search(
+        r"(\[tool\.poetry\.dependencies\]\s*\n)(.*?)(?=\n\[|\Z)",
+        content,
+        re.DOTALL,
+    )
+    if not section_match:
+        return []
+
+    dep_block = section_match.group(2)
+
+    # Parse existing poetry deps (format: package = "^1.0" or package = {version = "..."})
+    existing: set[str] = set()
+    for line in dep_block.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r'^(\S+)\s*=', line)
+        if m:
+            existing.add(m.group(1).lower())
+
+    to_add = [p for p in packages if p.lower() not in existing]
+    if not to_add:
+        return []
+
+    if not dry_run:
+        # Insert new entries at end of section
+        new_entries = "".join(f'{pkg} = "*"\n' for pkg in to_add)
+        insert_pos = section_match.end(2)
+        # Ensure there's a newline before our entries
+        if content[insert_pos - 1:insert_pos] != "\n":
+            new_entries = "\n" + new_entries
+        content = content[:insert_pos] + new_entries + content[insert_pos:]
+        toml_path.write_text(content, encoding="utf-8")
+
+    return to_add
+
+
 class DepFixer:
     """Detects missing dependencies from CI errors and adds them to project config."""
 
@@ -199,14 +303,26 @@ class DepFixer:
         result = DepFixResult()
 
         modules = extract_missing_modules(classified_errors)
-        result.missing_modules = modules
 
         if not modules:
             return result
 
+        # Filter out stdlib modules
+        filtered = []
+        for mod in modules:
+            if is_stdlib(mod):
+                result.skipped_stdlib.append(mod)
+            else:
+                filtered.append(mod)
+
+        result.missing_modules = filtered
+
+        if not filtered:
+            return result
+
         # Map each module to its PyPI package name
         packages = []
-        for mod in modules:
+        for mod in filtered:
             pypi = map_module_to_pypi(mod)
             result.mapped_packages[mod] = pypi
             packages.append(pypi)
@@ -218,44 +334,18 @@ class DepFixer:
         except OSError as exc:
             result.errors.append(f"requirements.txt: {exc}")
 
-        # Try adding to pyproject.toml
+        # Try adding to pyproject.toml (PEP 621)
         try:
             added = add_to_pyproject_toml(self.repo_path, packages, self.dry_run)
             result.added_to_pyproject = added
         except OSError as exc:
-            result.errors.append(f"pyproject.toml: {exc}")
+            result.errors.append(f"pyproject.toml (PEP 621): {exc}")
+
+        # Try adding to pyproject.toml (Poetry)
+        try:
+            added = add_to_poetry_pyproject(self.repo_path, packages, self.dry_run)
+            result.added_to_poetry = added
+        except OSError as exc:
+            result.errors.append(f"pyproject.toml (Poetry): {exc}")
 
         return result
-
-
-def format_dep_results(result: DepFixResult, dry_run: bool = False) -> str:
-    """Render dependency fix results as human-readable output."""
-    lines: list[str] = []
-    mode = "DRY RUN" if dry_run else "APPLIED"
-    lines.append(f"── cifix dep fixer ({mode}) ──\n")
-
-    if not result.missing_modules:
-        lines.append("  No missing dependencies detected.")
-        return "\n".join(lines)
-
-    lines.append(f"  Missing modules: {', '.join(result.missing_modules)}")
-    lines.append("  Mapped packages:")
-    for mod, pypi in result.mapped_packages.items():
-        marker = " (mapped)" if mod != pypi else ""
-        lines.append(f"    {mod} → {pypi}{marker}")
-
-    if result.added_to_requirements:
-        lines.append(f"\n  Added to requirements.txt: {', '.join(result.added_to_requirements)}")
-    if result.added_to_pyproject:
-        lines.append(f"  Added to pyproject.toml:    {', '.join(result.added_to_pyproject)}")
-
-    if not result.has_fixes:
-        lines.append("\n  Packages already present in dependency files (no changes needed).")
-
-    if result.errors:
-        lines.append("\n  Errors:")
-        for e in result.errors:
-            lines.append(f"    {e}")
-
-    lines.append("")
-    return "\n".join(lines)

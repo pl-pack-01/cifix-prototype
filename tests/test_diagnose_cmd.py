@@ -156,7 +156,7 @@ class TestDiagnoseDryRun:
             "--dry-run", "--repo-path", str(tmp_path),
         ])
         assert result.exit_code == 0
-        assert "Previewing" in result.output
+        assert "DRY RUN" in result.output
         mock_fixer_cls.assert_called_once_with(str(tmp_path), dry_run=True)
 
 

@@ -8,10 +8,10 @@ import sys
 import click
 
 from cifix.classifier import classify
-from cifix.formatter import format_analysis
+from cifix.formatter import format_analysis, format_fix_results, format_dep_results
 from cifix.github import fetch_run_logs
-from cifix.fixer.ruff_fixer import RuffFixer, format_fix_results
-from cifix.fixer.dep_fixer import DepFixer, format_dep_results
+from cifix.fixer.ruff_fixer import RuffFixer
+from cifix.fixer.dep_fixer import DepFixer
 
 
 @click.command("diagnose")
@@ -20,6 +20,7 @@ from cifix.fixer.dep_fixer import DepFixer, format_dep_results
 @click.option("--token", "-t", default=None, help="GitHub token (or set GITHUB_TOKEN env var).")
 @click.option("--provider", "-p", default="github", help="CI provider.")
 @click.option("--dry-run", is_flag=True, help="Preview fixes without modifying files.")
+@click.option("--apply", "auto_apply", is_flag=True, help="Apply fixes without confirmation prompt.")
 @click.option("--no-fix", is_flag=True, help="Classify only, skip auto-fix even if ruff errors found.")
 @click.option("--no-verify", is_flag=True, help="Skip post-fix verification step.")
 @click.option("--no-diff", is_flag=True, help="Suppress unified diff output.")
@@ -39,6 +40,7 @@ def diagnose_cmd(
     token: str | None,
     provider: str,
     dry_run: bool,
+    auto_apply: bool,
     no_fix: bool,
     no_verify: bool,
     no_diff: bool,
@@ -52,35 +54,42 @@ def diagnose_cmd(
     """Fetch CI logs, classify errors, and auto-fix what's possible.
 
     Chains the observe → plan → act → verify flow end-to-end.
+    By default, prompts for confirmation before applying fixes.
+    Use --apply to skip the confirmation prompt.
 
     \b
     Examples:
         cifix diagnose 12345 -r owner/repo
         cifix diagnose 12345 -r owner/repo --dry-run
-        cifix diagnose 12345 -r owner/repo --no-fix   # classify only
-        cifix diagnose 12345 -r owner/repo --repo-path ./my-project
+        cifix diagnose 12345 -r owner/repo --apply     # skip confirmation
+        cifix diagnose 12345 -r owner/repo --no-fix    # classify only
     """
-    from cifix.cli import get_token
+    from cifix.cli import get_token, console
 
     token = get_token(token)
 
     # ── Phase 1: Observe ─────────────────────────────────────────────────
     if not as_json:
-        click.echo(f"Fetching logs for run {run_id} in {repo}...")
-    log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
+        with console.status("[bold blue]Fetching logs...[/bold blue]"):
+            log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
+    else:
+        log_files = fetch_run_logs(repo, run_id, token, use_cache=not no_cache)
+
     raw_log = "\n".join(content for _, content in log_files)
 
     # ── Phase 2: Plan (classify) ─────────────────────────────────────────
     if not as_json:
-        click.echo("Classifying errors...")
-    result = classify(raw_log, provider=provider)
+        with console.status("[bold blue]Classifying errors...[/bold blue]"):
+            result = classify(raw_log, provider=provider)
+    else:
+        result = classify(raw_log, provider=provider)
 
     # ── Phase 2.5: LLM Review (optional) ────────────────────────────────
     if llm_provider:
         _run_llm_review(result, llm_provider, api_key, explain, as_json)
 
     if not as_json:
-        click.echo(format_analysis(result))
+        console.print(format_analysis(result))
 
     # Extract ruff-fixable file paths from classified errors
     ruff_targets = _extract_ruff_targets(result)
@@ -94,17 +103,20 @@ def diagnose_cmd(
                 "fix_results": None,
             }, indent=2))
         else:
-            click.echo("\nNo ruff-fixable errors detected.")
+            console.print("[dim]No ruff-fixable errors detected.[/dim]")
         # Still check for dependency fixes even without ruff errors
         _run_dep_fix(result, repo_path, dry_run, as_json)
         return
 
     if not as_json:
-        click.echo(f"\nFound ruff issues in {len(ruff_targets)} file(s): {', '.join(ruff_targets)}")
+        console.print(
+            f"\n[bold]Found ruff issues in {len(ruff_targets)} file(s):[/bold] "
+            f"{', '.join(ruff_targets)}"
+        )
 
     if no_fix:
         if not as_json:
-            click.echo("Skipping auto-fix (--no-fix).")
+            console.print("[yellow]Skipping auto-fix (--no-fix).[/yellow]")
         if as_json:
             click.echo(json.dumps({
                 "classification": result.to_dict(),
@@ -114,23 +126,38 @@ def diagnose_cmd(
             }, indent=2))
         return
 
+    # ── Confirmation prompt (unless --apply or --dry-run) ─────────────────
+    if not dry_run and not auto_apply and not as_json:
+        if not click.confirm("Apply fixes?", default=True):
+            console.print("[yellow]Aborted.[/yellow]")
+            return
+
     # ── Phase 3: Act (fix) ───────────────────────────────────────────────
     if not as_json:
         mode = "Previewing" if dry_run else "Applying"
-        click.echo(f"\n{mode} ruff fixes...")
-
-    try:
-        fixer = RuffFixer(repo_path, dry_run=dry_run)
-    except (FileNotFoundError, EnvironmentError) as exc:
-        click.secho(f"Error: {exc}", fg="red", err=True)
-        sys.exit(1)
-
-    fix_results = fixer.fix_all(targets=ruff_targets)
+        with console.status(f"[bold blue]{mode} ruff fixes...[/bold blue]"):
+            try:
+                fixer = RuffFixer(repo_path, dry_run=dry_run)
+            except (FileNotFoundError, EnvironmentError) as exc:
+                console.print(f"[bold red]Error:[/bold red] {exc}")
+                sys.exit(1)
+            fix_results = fixer.fix_all(targets=ruff_targets)
+    else:
+        try:
+            fixer = RuffFixer(repo_path, dry_run=dry_run)
+        except (FileNotFoundError, EnvironmentError) as exc:
+            click.secho(f"Error: {exc}", fg="red", err=True)
+            sys.exit(1)
+        fix_results = fixer.fix_all(targets=ruff_targets)
 
     # ── Phase 3.5: Verify ────────────────────────────────────────────────
     verify = None
     if not no_verify and not dry_run:
-        verify = fixer.verify(targets=ruff_targets)
+        if not as_json:
+            with console.status("[bold blue]Verifying fixes...[/bold blue]"):
+                verify = fixer.verify(targets=ruff_targets)
+        else:
+            verify = fixer.verify(targets=ruff_targets)
 
     # ── Output ───────────────────────────────────────────────────────────
     if as_json:
@@ -157,7 +184,7 @@ def diagnose_cmd(
             }
         click.echo(json.dumps(payload, indent=2))
     else:
-        click.echo(format_fix_results(
+        console.print(format_fix_results(
             fix_results,
             verify=verify,
             show_diff=not no_diff,
@@ -176,17 +203,19 @@ def _run_llm_review(
     result, llm_name: str, api_key: str | None, explain: bool, as_json: bool,
 ) -> None:
     """Run LLM-assisted review and optional explanation generation."""
+    from cifix.cli import console
+
     try:
         from cifix.llm_provider import get_provider
         from cifix.llm_advisor import LLMAdvisor, recompute_verdict
     except ImportError as exc:
-        click.secho(f"LLM support unavailable: {exc}", fg="red", err=True)
+        console.print(f"[bold red]LLM support unavailable:[/bold red] {exc}")
         return
 
     try:
         provider = get_provider(llm_name, api_key=api_key)
     except (ImportError, ValueError) as exc:
-        click.secho(f"LLM error: {exc}", fg="red", err=True)
+        console.print(f"[bold red]LLM error:[/bold red] {exc}")
         return
 
     advisor = LLMAdvisor(provider)
@@ -195,30 +224,43 @@ def _run_llm_review(
     review_candidates = sum(1 for e in result.errors if e.needs_llm_review)
     if review_candidates:
         if not as_json:
-            click.echo(
-                f"\nSending {review_candidates} ambiguous error(s) to {provider.name}..."
-            )
-        review_result = advisor.review_errors(result.errors)
-        recompute_verdict(result)
-        if not as_json and review_result.reviewed_count:
-            click.echo(f"  Reclassified {review_result.reviewed_count} error(s).")
+            with console.status(
+                f"[bold blue]Sending {review_candidates} error(s) to {provider.name}...[/bold blue]"
+            ):
+                review_result = advisor.review_errors(result.errors)
+            recompute_verdict(result)
+            if review_result.reviewed_count:
+                console.print(
+                    f"  [green]Reclassified {review_result.reviewed_count} error(s).[/green]"
+                )
+        else:
+            review_result = advisor.review_errors(result.errors)
+            recompute_verdict(result)
 
     # Explain errors
     if explain:
         if not as_json:
-            click.echo(f"Generating explanations via {provider.name}...")
-        explain_result = advisor.explain_errors(result.errors)
-        if not as_json and explain_result.explained_count:
-            click.echo(f"  Added {explain_result.explained_count} explanation(s).")
+            with console.status(
+                f"[bold blue]Generating explanations via {provider.name}...[/bold blue]"
+            ):
+                explain_result = advisor.explain_errors(result.errors)
+            if explain_result.explained_count:
+                console.print(
+                    f"  [green]Added {explain_result.explained_count} explanation(s).[/green]"
+                )
+        else:
+            advisor.explain_errors(result.errors)
 
 
 def _run_dep_fix(result, repo_path: str, dry_run: bool, as_json: bool) -> None:
     """Run dependency fixer on classified import errors."""
+    from cifix.cli import console
+
     try:
         fixer = DepFixer(repo_path, dry_run=dry_run)
     except FileNotFoundError as exc:
         if not as_json:
-            click.secho(f"Dep fix skipped: {exc}", fg="yellow", err=True)
+            console.print(f"[yellow]Dep fix skipped:[/yellow] {exc}")
         return
 
     dep_result = fixer.fix(result.errors)
@@ -229,16 +271,11 @@ def _run_dep_fix(result, repo_path: str, dry_run: bool, as_json: bool) -> None:
     if as_json:
         click.echo(json.dumps({"dep_fix": dep_result.to_dict()}, indent=2))
     else:
-        click.echo(format_dep_results(dep_result, dry_run=dry_run))
+        console.print(format_dep_results(dep_result, dry_run=dry_run))
 
 
 def _extract_ruff_targets(result) -> list[str]:
-    """Pull unique file paths from classified errors that ruff can fix.
-
-    Matches errors with pattern names containing 'ruff' and extracts
-    file paths from the error context (file_path field or parsed from
-    the matched line).
-    """
+    """Pull unique file paths from classified errors that ruff can fix."""
     import re
 
     ruff_patterns = {"ruff_format", "ruff_check", "ruff_lint", "ruff"}

@@ -14,9 +14,9 @@ from cifix.fixer.dep_fixer import (
     add_to_pyproject_toml,
     add_to_requirements_txt,
     extract_missing_modules,
-    format_dep_results,
     map_module_to_pypi,
 )
+from cifix.formatter import format_dep_results
 
 
 # -- Helpers ---------------------------------------------------------------
