@@ -4,11 +4,51 @@ A CLI tool for fetching, analyzing, and auto-fixing CI failures from GitHub Acti
 
 ## Installation
 
+### Recommended: pipx (isolated install)
+
+```bash
+pipx install git+https://github.com/your-username/cifix.git
+```
+
+This installs `cifix` as a standalone command in its own virtual environment. Install [pipx](https://pipx.pypa.io/) first if you don't have it.
+
+To upgrade later:
+
+```bash
+pipx upgrade cifix
+```
+
+To uninstall:
+
+```bash
+pipx uninstall cifix
+```
+
+### Alternative: pip
+
+```bash
+pip install git+https://github.com/your-username/cifix.git
+```
+
+### With LLM support
+
+```bash
+# Single provider
+pipx install "cifix[anthropic] @ git+https://github.com/your-username/cifix.git"
+
+# All providers
+pipx install "cifix[llm] @ git+https://github.com/your-username/cifix.git"
+```
+
+### For development
+
 ```bash
 git clone https://github.com/your-username/cifix.git
 cd cifix
-pip install -e .
+pip install -e ".[dev]"
 ```
+
+### Prerequisites
 
 Cifix requires [ruff](https://docs.astral.sh/ruff/) for auto-fix features:
 

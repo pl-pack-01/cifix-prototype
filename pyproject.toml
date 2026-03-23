@@ -6,8 +6,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cifix"
 version = "0.5.0"
-description = "A CLI tool built with Click"
+description = "CLI tool for analyzing and auto-fixing CI/CD failures"
 requires-python = ">=3.9"
+readme = "README.md"
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "click>=8.1",
     "requests>=2.31",
